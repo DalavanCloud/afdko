@@ -4,6 +4,7 @@ from fontTools.ttLib.ttFont import TTFont
 from fontTools.varLib import (load_designspace, log)
 from cff2_specializer import (addCFFVarStore,
                               addNamesToPost,
+                              merge_PrivateDicts,
                               merge_charstrings,
                               convertCFFtoCFF2,)
 from fontTools.varLib.models import VariationModel
@@ -13,16 +14,21 @@ def _add_CFF2(varFont, model, master_fonts):
     glyphOrder = varFont.getGlyphOrder()
     addNamesToPost(varFont, glyphOrder)
     convertCFFtoCFF2(varFont)
-    addCFFVarStore(model, varFont)
+    addCFFVarStore(model, varFont) # Add VarStore to the CFF2 font.
+    merge_region_fonts(varFont, model, master_fonts, glyphOrder)
+
+def merge_region_fonts(varFont, model, master_fonts, glyphOrder):
     topDict = varFont['CFF2'].cff.topDictIndex[0]
     default_charstrings = topDict.CharStrings
     region_fonts = [master_fonts[idx] for idx in model.mapping][1:]
+    region_top_dicts = [ttFont['CFF '].cff.topDictIndex[0] for ttFont in region_fonts]
     num_masters = len(model.mapping)
+    
+    merge_PrivateDicts(topDict, region_top_dicts, num_masters, model)
     merge_charstrings(default_charstrings,
                       glyphOrder,
                       num_masters,
-                      region_fonts)
-
+                      region_top_dicts)
 
 def build(designspace_filename,
           master_finder=lambda s: s,

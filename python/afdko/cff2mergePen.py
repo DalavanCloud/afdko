@@ -1,16 +1,17 @@
 # Copyright (c) 2009 Type Supply LLC
 
 from __future__ import print_function, division, absolute_import
-from fontTools.misc.psCharStrings import T2CharString
+from fontTools.misc.psCharStrings import CFF2Subr
 from fontTools.pens.t2CharStringPen import T2CharStringPen
+from fontTools.cffLib.specializer import specializeCommands
 
 
 class MergeTypeError(TypeError):
-    def __init__(self, region_type, pt_index, m_index, default_type):
-        error_msg = """{region_type} at point index {pt_index} in master"
+    def __init__(self, point_type, pt_index, m_index, default_type):
+        error_msg = """{point_type} at point index {pt_index} in master"
 {m_index}' differs from the default font point "
 type {default_type}""".format(
-                                        region_type=region_type,
+                                        point_type=point_type,
                                         pt_index=pt_index,
                                         m_index=m_index,
                                         default_type=default_type)
@@ -18,19 +19,46 @@ type {default_type}""".format(
         super(MergeTypeError, self).__init__(error_msg)
 
 
-def commandsToProgram(commands):
+def commandsToProgram(commands, max_stack):
     """Takes a commands list as returned by programToCommands() and converts
     it back to a T2CharString program list."""
     program = []
     for op, args in commands:
-        for arg in args:
-            if type(arg) is tuple:
-                program.append(arg[0])
-                program.extend([argn - arg[0] for argn in arg[1:]])
-                program.append(1)
-                program.append('blend')
-            else:
+        num_args = len(args)
+        # some of the args may be blend lists, and some may be
+        # single coordinate values.
+        i = 0
+        stack_use = 0
+        while i < num_args:
+            arg = args[i]
+            if type(arg) is not tuple:
                 program.append(arg)
+                i+= 1
+                stack_use += 1
+            else:
+                """ The arg is a tuple of blend values.
+                These are each (master 0,master 1..master n)
+                Look forward to see how many we can combine.
+                """
+                num_masters = len(arg)
+                blendlist = [arg]
+                i+= 1
+                stack_use += 1 # for the num_blends arg
+                while (i < num_args) and (type(args[i]) is  tuple):
+                    blendlist.append(args[i])
+                    i += 1
+                    stack_use += num_masters
+                    if stack_use + num_masters > max_stack:
+                        break
+                num_blends = len(blendlist)
+                # append the 'num_blends' default font values
+                for arg in blendlist:
+                    program.append(arg[0])
+                # for each arg, append the region deltas
+                for arg in blendlist:
+                    program.extend([argn - arg[0] for argn in arg[1:]])
+                program.append(num_blends)
+                program.append('blend')
         if op:
             program.append(op)
     return program
@@ -53,15 +81,15 @@ class CFF2CharStringMergePen(T2CharStringPen):
         pt = self._p0 = self.roundPoint(pt)
         return [pt[0]-p0[0], pt[1]-p0[1]]
 
-    def add_point(self, region_type, pt_coords):
+    def add_point(self, point_type, pt_coords):
 
         if self.m_index == 0:
-            self._commands.append([region_type, [pt_coords]])
+            self._commands.append([point_type, [pt_coords]])
         else:
             cmd = self._commands[self.pt_index]
-            if cmd[0] != region_type:
+            if cmd[0] != point_type:
                 raise MergeTypeError(
-                                region_type,
+                                point_type,
                                 self.pt_index,
                                 len(cmd[1]),
                                 cmd[0])
@@ -95,7 +123,15 @@ class CFF2CharStringMergePen(T2CharStringPen):
     def getCommands(self):
         return self._commands
 
-    def addBlendOps(self):
+    def reorder_blend_args(self):
+        """
+        For a moveto to lineto, the args are now arranged as:
+            [ [master_0 x,y], [master_1 x,y], [master_2 x,y] ]
+        We re-arrange this to
+        [   [master_0 x, master_1 x, master_2 x],
+            [master_0 y, master_1 y, master_2 y]
+        ]
+        """
         for cmd in self._commands:
             # arg[i] is the set of arguments for this operator from master i.
             args = cmd[1]
@@ -111,8 +147,14 @@ class CFF2CharStringMergePen(T2CharStringPen):
             cmd[1] = m_args
 
     def getCharString(self, private=None, globalSubrs=None, optimize=True):
-        self.addBlendOps()
-        program = commandsToProgram(self._commands)
-        charString = T2CharString(
+        self.reorder_blend_args()
+        commands = self._commands
+        if optimize:
+            maxstack = 48 if not self._CFF2 else 513
+            commands = specializeCommands(commands,
+                                          generalizeFirst=False,
+                                          maxstack=maxstack)
+        program = commandsToProgram(commands, maxstack)
+        charString = CFF2Subr(
             program=program, private=private, globalSubrs=globalSubrs)
         return charString

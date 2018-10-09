@@ -113,11 +113,14 @@ def lib_convertCFFToCFF2(cff, otFont):
     cff.decompile(file, otFont, isCFF2=True)
 
 
-def convertCFFtoCFF2(varFont):
-    # base font contains the CFF2 blend data, but with the table tag 'CFF '
-    # all the CFF fields. Remove all the fields that were removed in the
-    # CFF2 spec.
+def pointsDiffer(pointList):
+    p0 = max(pointList)
+    p1 = min(pointList)
+    result = True if p1 == p0 else False 
 
+
+def convertCFFtoCFF2(varFont):
+    # Convert base font to a single master CFF2 font.
     cffTable = varFont['CFF ']
     lib_convertCFFToCFF2(cffTable.cff, varFont)
     newCFF2 = newTable("CFF2")
@@ -126,23 +129,73 @@ def convertCFFtoCFF2(varFont):
     del varFont['CFF ']
 
 
+def merge_PrivateDicts(topDict, region_top_dicts, num_masters, var_model):
+    print(region_top_dicts)
+    if hasattr(region_top_dicts[0], 'FDArray'):
+        regionFDArrays =  [fdTopDict.FDArray for fdTopDict in region_top_dicts]
+    else:
+        regionFDArrays = [[fdTopDict] for fdTopDict in region_top_dicts]
+    for fd_index, font_dict in enumerate(topDict.FDArray):
+        private_dict = font_dict.Private
+        pds = [private_dict] + [
+            regionFDArray[fd_index].Private for regionFDArray in regionFDArrays
+            ]
+        for key, value in private_dict.rawDict.items():
+            
+            if isinstance(value, list):
+                values = [pd.rawDict[key] for pd in pds]
+                values = zip(*values)
+                """
+                Row 0 contains the first  value from each master.
+                Convert each row from absolute values to relative
+                values from the previous row.
+                e.g for three masters,  a list of values was:
+                master 0 OtherBlues = [-217,-205]
+                master 1 OtherBlues = [-234,-222]
+                master 1 OtherBlues = [-188,-176]
+                The call to zip() converts this to:
+                [(-217, -234, -188), (-205, -222, -176)]
+                and is converted finally to:
+                OtherBlues = [[-217, 17.0, 46.0], [-205, 0.0, 0.0]]
+                """
+                dataList = []
+                prev_val_list = [0] * num_masters
+                for val_list in values:
+                    rel_list = [(val - prev_val_list[i]) for (
+                            i, val) in enumerate(val_list)]
+                    prev_val_list = val_list
+                    deltas = var_model.getDeltas(rel_list)
+                    # For PrivateDict BlueValues, the default font
+                    # values are absolute, not relative to the prior value.
+                    deltas[0] = val_list[0]
+                    dataList.append(deltas)
+            else:
+                values = [pd.rawDict[key] for pd in pds]
+                if pointsDiffer(values):
+                    dataList = var_model.getDeltas(values)
+                else:
+                    dataList = values[0]
+            private_dict.rawDict[key] = dataList
+            print(key, dataList)
+
+
 def merge_charstrings(default_charstrings,
                       glyphOrder,
                       num_masters,
-                      region_fonts):
+                      region_top_dicts):
     for gname in glyphOrder:
         default_charstring = default_charstrings[gname]
         var_pen = CFF2CharStringMergePen([], num_masters, master_idx=0)
         default_charstring.draw(var_pen)
         region_idx = 0
-        for ttFont in region_fonts:
+        for region_td in region_top_dicts:
             region_idx += 1
-            region_charstrings = ttFont['CFF '].cff.topDictIndex[0].CharStrings
+            region_charstrings = region_td.CharStrings
             region_charstring = region_charstrings[gname]
             var_pen.restart(region_idx)
             region_charstring.draw(var_pen)
         new_charstring = var_pen.getCharString(
             private=default_charstring.private,
             globalSubrs=default_charstring.globalSubrs,
-            optimize=False)
+            optimize=True)
         default_charstrings[gname] = new_charstring

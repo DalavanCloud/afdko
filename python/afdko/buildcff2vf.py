@@ -48,7 +48,7 @@ import sys
 
 from fontTools import version as fontToolsVersion
 from pkg_resources import parse_version
-import cff2_varlib
+from afdko.cff2_varlib import build as varlib_build
 
 
 def otfFinder(s):
@@ -86,7 +86,7 @@ def run(args=None):
 
     if os.path.exists(varFontPath):
         os.remove(varFontPath)
-    varFont, varModel, masterPaths = cff2_varlib.build(
+    varFont, varModel, masterPaths = varlib_build(
                                     designSpacePath, otfFinder)
     if post_format_3:
         varFont['post'].formatType = 3.0

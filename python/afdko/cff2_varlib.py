@@ -14,21 +14,29 @@ def _add_CFF2(varFont, model, master_fonts):
     glyphOrder = varFont.getGlyphOrder()
     addNamesToPost(varFont, glyphOrder)
     convertCFFtoCFF2(varFont)
-    addCFFVarStore(model, varFont) # Add VarStore to the CFF2 font.
-    merge_region_fonts(varFont, model, master_fonts, glyphOrder)
+    # I sort the master font in the mode l order so as to
+    # not have to index through model.mapping when building
+    # a blend vector from the master font data.
+    ordered_fonts_list = [master_fonts[idx] for idx in model.reverseMapping]
+    model.mapping = model.reverseMapping = range(len(master_fonts))
+    addCFFVarStore(varFont, model)  # Add VarStore to the CFF2 font.
+    merge_region_fonts(varFont, model, ordered_fonts_list, glyphOrder)
 
-def merge_region_fonts(varFont, model, master_fonts, glyphOrder):
+
+def merge_region_fonts(varFont, model, ordered_fonts_list, glyphOrder):
     topDict = varFont['CFF2'].cff.topDictIndex[0]
     default_charstrings = topDict.CharStrings
-    region_fonts = [master_fonts[idx] for idx in model.mapping][1:]
-    region_top_dicts = [ttFont['CFF '].cff.topDictIndex[0] for ttFont in region_fonts]
+    region_fonts = ordered_fonts_list[1:]
+    region_top_dicts = [
+            ttFont['CFF '].cff.topDictIndex[0] for ttFont in region_fonts
+                ]
     num_masters = len(model.mapping)
-    
     merge_PrivateDicts(topDict, region_top_dicts, num_masters, model)
     merge_charstrings(default_charstrings,
                       glyphOrder,
                       num_masters,
-                      region_top_dicts)
+                      region_top_dicts, model)
+
 
 def build(designspace_filename,
           master_finder=lambda s: s,

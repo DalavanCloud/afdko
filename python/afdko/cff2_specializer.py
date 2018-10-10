@@ -1,3 +1,4 @@
+import os
 from fontTools.misc.py23 import BytesIO
 from fontTools.cffLib import (TopDictIndex,
                               buildOrder,
@@ -10,10 +11,10 @@ from fontTools.cffLib import (TopDictIndex,
                               VarStoreData,)
 from fontTools.ttLib import newTable
 from fontTools import varLib
-from cff2mergePen import CFF2CharStringMergePen
+from cff2mergePen import CFF2CharStringMergePen, MergeTypeError
 
 
-def addCFFVarStore(varModel, varFont):
+def addCFFVarStore(varFont, varModel):
     supports = varModel.supports[1:]
     fvarTable = varFont['fvar']
     axisKeys = [axis.axisTag for axis in fvarTable.axes]
@@ -116,7 +117,8 @@ def lib_convertCFFToCFF2(cff, otFont):
 def pointsDiffer(pointList):
     p0 = max(pointList)
     p1 = min(pointList)
-    result = True if p1 == p0 else False 
+    result = True if p1 == p0 else False
+    return result
 
 
 def convertCFFtoCFF2(varFont):
@@ -129,10 +131,22 @@ def convertCFFtoCFF2(varFont):
     del varFont['CFF ']
 
 
+class MergeDictError(TypeError):
+    def __init__(self, key, value, values):
+        error_msg = ["For the Private Dict key ()".format(key)]
+        error_msg.append("the default font value list:")
+        error_msg.append("\t{}".format(value))
+        error_msg.append(
+                    "had a different number of values than"
+                    "a region font:")
+        for value in values:
+            error_msg.append("\t{}".format(value))
+        error_msg = os.linesep.join(error_msg)
+
+
 def merge_PrivateDicts(topDict, region_top_dicts, num_masters, var_model):
-    print(region_top_dicts)
     if hasattr(region_top_dicts[0], 'FDArray'):
-        regionFDArrays =  [fdTopDict.FDArray for fdTopDict in region_top_dicts]
+        regionFDArrays = [fdTopDict.FDArray for fdTopDict in region_top_dicts]
     else:
         regionFDArrays = [[fdTopDict] for fdTopDict in region_top_dicts]
     for fd_index, font_dict in enumerate(topDict.FDArray):
@@ -141,10 +155,20 @@ def merge_PrivateDicts(topDict, region_top_dicts, num_masters, var_model):
             regionFDArray[fd_index].Private for regionFDArray in regionFDArrays
             ]
         for key, value in private_dict.rawDict.items():
-            
             if isinstance(value, list):
-                values = [pd.rawDict[key] for pd in pds]
-                values = zip(*values)
+                try:
+                    values = [pd.rawDict[key] for pd in pds]
+                except KeyError:
+                    del private_dict.rawDict[key]
+                    print(
+                        "Warning: {key} in default font Private dict is "
+                        b"missing from another font, and was "
+                        b"discarded.".format(key=key))
+                    continue
+                try:
+                    values = zip(*values)
+                except IndexError:
+                    raise MergeDictError(key, value, values)
                 """
                 Row 0 contains the first  value from each master.
                 Convert each row from absolute values to relative
@@ -176,26 +200,39 @@ def merge_PrivateDicts(topDict, region_top_dicts, num_masters, var_model):
                 else:
                     dataList = values[0]
             private_dict.rawDict[key] = dataList
-            print(key, dataList)
+
+
+class MergeCharError(TypeError):
+    def __init__(self, glyph_name, mergeError):
+        self.error_msg = "{mergeError} in glyph {glyph_name}".format(
+                mergeError=mergeError.error_msg,
+                glyph_name=glyph_name)
 
 
 def merge_charstrings(default_charstrings,
                       glyphOrder,
                       num_masters,
-                      region_top_dicts):
+                      region_top_dicts,
+                      var_model):
     for gname in glyphOrder:
         default_charstring = default_charstrings[gname]
         var_pen = CFF2CharStringMergePen([], num_masters, master_idx=0)
         default_charstring.draw(var_pen)
-        region_idx = 0
-        for region_td in region_top_dicts:
+        for region_idx, region_td in enumerate(region_top_dicts):
             region_idx += 1
             region_charstrings = region_td.CharStrings
             region_charstring = region_charstrings[gname]
             var_pen.restart(region_idx)
-            region_charstring.draw(var_pen)
+            try:
+                region_charstring.draw(var_pen)
+            except MergeTypeError as err:
+                err.gname = gname
+                err.region_idx = region_idx
+                raise MergeCharError(gname, err.error_msg)
+
         new_charstring = var_pen.getCharString(
             private=default_charstring.private,
             globalSubrs=default_charstring.globalSubrs,
+            var_model=var_model,
             optimize=True)
         default_charstrings[gname] = new_charstring

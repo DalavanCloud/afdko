@@ -62,25 +62,6 @@ UFO masters with partial glyphsets are supported.
 """
 
 
-def compatibilizePaths(otfPath):
-    tempPathCFF = otfPath + ".temp.cff"
-    command = "tx -cff +b -std -no_opt \"%s\" \"%s\" 2>&1" % (otfPath,
-                                                              tempPathCFF)
-    report = runShellCmd(command)
-    if "fatal" in str(report):
-        print(report)
-        sys.exit(1)
-
-    command = "sfntedit -a \"CFF \"=\"%s\" \"%s\" 2>&1" % (tempPathCFF,
-                                                           otfPath)
-    report = runShellCmd(command)
-    if "FATAL" in str(report):
-        print(report)
-        sys.exit(1)
-
-    os.remove(tempPathCFF)
-
-
 def _determine_which_masters_to_generate(ds_path):
     """'ds_path' is the path to a designspace file.
        Returns a list of integers representing the indexes
@@ -233,15 +214,16 @@ def main(args=None):
         cmd = "makeotf -nshw -f \"%s\" -o \"%s\" -r -nS %s 2>&1" % (
             ufoName, otfName, mkot_options)
         log = runShellCmd(cmd)
-        if ("FATAL" in log) or ("Failed to build" in log):
-            print(log)
-
-        if "Built" not in str(log):
-            print("Error building OTF font for", master_path, log)
+        if (
+				("FATAL" in log) or
+				("Failed to build" in log) or
+				("Built" not in str(log))
+			):
+            print("Error building OTF font for", master_path)
+            print('Error log: """', log, '"""')
             print("makeotf cmd was '%s' in %s." % (cmd, masterDir))
         else:
             print("Built OTF font for", master_path)
-            compatibilizePaths(otfName)
             if ufoName.endswith(kTempUFOExt):
                 shutil.rmtree(ufoName)
         os.chdir(curDir)

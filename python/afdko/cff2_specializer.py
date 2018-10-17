@@ -207,6 +207,7 @@ class MergeCharError(TypeError):
         self.error_msg = "{mergeError} in glyph {glyph_name}".format(
                 mergeError=mergeError.error_msg,
                 glyph_name=glyph_name)
+        super(MergeCharError, self).__init__(self.error_msg)
 
 
 def merge_charstrings(default_charstrings,
@@ -228,8 +229,7 @@ def merge_charstrings(default_charstrings,
             except MergeTypeError as err:
                 err.gname = gname
                 err.region_idx = region_idx
-                raise MergeCharError(gname, err.error_msg)
-
+                raise MergeCharError(gname, err)
         new_charstring = var_pen.getCharString(
             private=default_charstring.private,
             globalSubrs=default_charstring.globalSubrs,

@@ -12,15 +12,14 @@ from fontTools.cffLib.specializer import (
 
 class MergeTypeError(TypeError):
     def __init__(self, point_type, pt_index, m_index, default_type):
-        error_msg = """{point_type} at point index {pt_index} in master"
-{m_index}' differs from the default font point "
-type {default_type}""".format(
+        self.error_msg = """'{point_type}' at point index {pt_index} in master
+index {m_index} differs from the default font point type '{default_type}'""".format(
                                         point_type=point_type,
                                         pt_index=pt_index,
                                         m_index=m_index,
                                         default_type=default_type)
 
-        super(MergeTypeError, self).__init__(error_msg)
+        super(MergeTypeError, self).__init__(self.error_msg)
 
 
 def specializeCommands(
@@ -354,7 +353,7 @@ def commandsToProgram(commands, max_stack, var_model=None):
         stack_use = 0
         while i < num_args:
             arg = args[i]
-            if type(arg) is not tuple:
+            if not isinstance(arg, list):
                 program.append(arg)
                 i += 1
                 stack_use += 1
@@ -401,31 +400,156 @@ class CFF2CharStringMergePen(T2CharStringPen):
         self._commands = default_commands
         self.m_index = master_idx
         self.num_masters = num_masters
-
+        self.prev_move_idx = 0
+        
     def _p(self, pt):
-        p0 = self._p0
-        pt = self._p0 = self.roundPoint(pt)
-        return [pt[0]-p0[0], pt[1]-p0[1]]
+        """ Unlike T2CharstringPen, this class stores absolute values.
+        This is to allow the logic in check_and_fix_clospath() to work,
+        where the current or previous absolute point has to be compared to
+        the path start-point.
+        """
+        self._p0 = pt
+        return list(self._p0)
 
+    def make_flat_curve(self, coords):
+        # coords id for a lineto that needs to be a flat curve.
+        # Convert to curve coords  by pre-pending [0,0], and appending [0,0]
+        if isinstance(coords[0], list):
+            new_coords = [ [0, 0] + pt_coord + [0, 0] for pt_coord in coords]
+        else:
+            new_coords = [0, 0] + coords + [0, 0]
+        return new_coords
+
+    def check_and_fix_flat_curve(self, cmd, point_type, pt_coords):
+        if (point_type == 'rlineto') and (cmd[0] == 'rrcurveto'):
+            pt_coords = self.make_flat_curve(pt_coords)
+            success = True
+        elif (point_type == 'rrcurveto') and (cmd[0] == 'rlineto'):
+            expanded_coords = self.make_flat_curve(cmd[1])
+            cmd[1] = expanded_coords
+            cmd[0] = point_type
+            success = True
+        else:
+            success = False
+        return success, pt_coords
+
+    def check_and_fix_clospath(self, cmd, point_type, pt_coords):
+        """ Some workflows drop a lineto which closes a path.
+        Also, if the last segment is a curve in one master,
+        and a flat curve in another, the flat curve can get
+        converted to a closing lineto, and then dropped.
+        Test if:
+        1) one master op is a moveto,
+        2) the previous op for this master does not close the path
+        3) in the other master the current op is not a moveto
+        4) the current op in the otehr master closes the current path
+        
+        If the default font is missing the closing lineto, insert it,
+        then proceed with merging the current op and pt_coords.
+        
+        If the current region is missing the closing lineto
+        and therefore the current op is a moveto,
+        then add closing coordinates to self._commands,
+        and increment self.pt_index.
+        
+        Note that if this may insert a point in the default font list,
+        so after using it, 'cmd' needs to be reset.
+        
+        return True if we can fix this issue.
+        """
+        if point_type == 'rmoveto':
+            # If this is the case, we know that cmd[0] != 'rmoveto'
+
+            # The previous op must not close the path for this region font.
+            prev_moveto_coords = self._commands[self.prev_move_idx][1][-1]
+            prv_coords = self._commands[self.pt_index-1][1][-1]
+            if prev_moveto_coords == prv_coords[-2:]:
+                return False
+
+            # The current op must close the path for the default font.
+            prev_moveto_coords2 = self._commands[self.prev_move_idx][1][0]
+            prv_coords = self._commands[self.pt_index][1][0]
+            if prev_moveto_coords2 != prv_coords[-2:]:
+                return False
+
+            # Add the closing line coords for this region
+            # so self._commands, then increment self.pt_index
+            # so that the current region op will get merged
+            # with the next default font moveto.
+            if cmd[0] == 'rrcurveto':
+                new_coords = self.make_flat_curve(prev_moveto_coords)
+            cmd[1].append(new_coords)
+            self.pt_index += 1
+            return True
+
+        if cmd[0] == 'rmoveto':
+            # The previous op must not close the path for the default font.
+            prev_moveto_coords = self._commands[self.prev_move_idx][1][0]
+            prv_coords = self._commands[self.pt_index-1][1][0]
+            if prev_moveto_coords == prv_coords[-2:]:
+                return False
+            
+            # The current op must close the path for this region font.
+            prev_moveto_coords2 = self._commands[self.prev_move_idx][1][-1]
+            if prev_moveto_coords2 != pt_coords[-2:]:
+                return False
+                
+            # Insert the close path segment in the default font.
+            # We omit the last coords from the previous moveto
+            # is it will be supplied by the current region point.
+            # after this function returns.
+            new_cmd = [point_type, None]
+            prev_move_coords =  self._commands[self.prev_move_idx][1][:-1]
+            if point_type == 'rlineto':
+                new_cmd[1] = prev_move_coords
+            else:
+                new_cmd[1] = coord_list = []
+                # We omit the last set of coords from the
+                # previous moveto, as it will be supplied by the'coords 
+                # for the current region pt.
+                for coords in prev_move_coords:
+                    new_coords = self.make_flat_curve(coords)
+                    coord_list.append(new_coords)
+            self._commands.insert(self.pt_index, new_cmd)
+            return True
+        return False
+        
     def add_point(self, point_type, pt_coords):
-
         if self.m_index == 0:
             self._commands.append([point_type, [pt_coords]])
         else:
             cmd = self._commands[self.pt_index]
             if cmd[0] != point_type:
-                raise MergeTypeError(
-                                point_type,
-                                self.pt_index,
-                                len(cmd[1]),
-                                cmd[0])
+                # Fix some issues that show up in some
+                # CFF workflows, even when fonts are
+                # toplogically merge compatible.
+                success, pt_coords = self.check_and_fix_flat_curve(
+                            cmd, point_type, pt_coords)
+                if not success:
+                    success = self.check_and_fix_clospath(
+                            cmd, point_type, pt_coords)
+                    if success:
+                        # We may have incremented self.pt_index
+                        cmd = self._commands[self.pt_index]
+                        if cmd[0] != point_type:
+                            success = False
+                    if not success:
+                        raise MergeTypeError(
+                                        point_type,
+                                        self.pt_index,
+                                        len(cmd[1]),
+                                        cmd[0])
             cmd[1].append(pt_coords)
         self.pt_index += 1
 
     def _moveTo(self, pt):
         pt_coords = self._p(pt)
+        self.prev_move_abs_coords = self.roundPoint(self._p0)
         self.add_point('rmoveto', pt_coords)
-
+        # I set prev_move_idx here because add_point()
+        # can change self.pt_index.
+        self.prev_move_idx = self.pt_index -1
+        
     def _lineTo(self, pt):
         pt_coords = self._p(pt)
         self.add_point('rlineto', pt_coords)
@@ -457,6 +581,7 @@ class CFF2CharStringMergePen(T2CharStringPen):
         [   [master_0 x, master_1 x, master_2 x],
             [master_0 y, master_1 y, master_2 y]
         ]
+        We also make the value relative.
         """
         for cmd in self._commands:
             # arg[i] is the set of arguments for this operator from master i.
@@ -465,12 +590,25 @@ class CFF2CharStringMergePen(T2CharStringPen):
             # m_args[n] is now all num_master args for the ith argument
             # for this operation.
             cmd[1] = m_args
-            # reduce the variable args to a non-variable arg
-            # if the values are all the same.
-            for i, arg in enumerate(m_args):
-                if max(arg) == min(arg):
-                    m_args[i] = arg[0]
-            cmd[1] = m_args
+
+        # Now convert from absolute to relative
+        x0 = y0 = [0]*self.num_masters
+        for cmd in self._commands:
+            is_x = True
+            coords = cmd[1]
+            rel_coords = []
+            for coord in coords:
+                prev_coord = x0 if is_x else y0
+                rel_coord = [pt[0] - pt[1] for pt in  zip(coord, prev_coord)]
+                if max(rel_coord) == min(rel_coord):
+                    rel_coord = rel_coord[0]
+                rel_coords.append(rel_coord)
+                if is_x:
+                    x0 = coord
+                else:
+                    y0 = coord
+                is_x = not is_x
+            cmd[1] = rel_coords
 
     def getCharString(
                     self, private=None, globalSubrs=None,

@@ -202,7 +202,7 @@ def specializeCommands(
             if (
                 i and op in {'hlineto', 'vlineto'} and
                 op == commands[i-1][0] and
-                type(args[0]) != tuple
+                (not isinstance(args[0], list))
                ):
                 _, other_args = commands[i-1]
                 assert len(args) == 1 and len(other_args) == 1

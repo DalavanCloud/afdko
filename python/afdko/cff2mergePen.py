@@ -14,8 +14,8 @@ from fontTools.cffLib.specializer import (
 class MergeTypeError(TypeError):
     def __init__(self, point_type, pt_index, m_index, default_type):
         self.error_msg = [
-                    "'{point_type}' at point index {pt_index} in master"
-                    "index {m_index} differs from the default font point"
+                    "'{point_type}' at point index {pt_index} in master "
+                    "index {m_index} differs from the default font point "
                     "type '{default_type}'".format(
                         point_type=point_type,
                         pt_index=pt_index,

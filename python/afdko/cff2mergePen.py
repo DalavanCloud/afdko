@@ -13,17 +13,19 @@ from fontTools.cffLib.specializer import (
 
 class MergeTypeError(TypeError):
     def __init__(self, point_type, pt_index, m_index, default_type):
-        self.error_msg = """'{point_type}' at point index {pt_index} in master
-index {m_index} differs from the default font point type '{default_type}'""".format(
-                                        point_type=point_type,
-                                        pt_index=pt_index,
-                                        m_index=m_index,
-                                        default_type=default_type)
-
+        self.error_msg = [
+                    "'{point_type}' at point index {pt_index} in master"
+                    "index {m_index} differs from the default font point"
+                    "type '{default_type}'".format(
+                        point_type=point_type,
+                        pt_index=pt_index,
+                        m_index=m_index,
+                        default_type=default_type)
+                    ][0]
         super(MergeTypeError, self).__init__(self.error_msg)
 
 
-# Copied from fonttools.cffLib.specializer: will merge this back once 
+# Copied from fonttools.cffLib.specializer: will merge this back once
 # everything is working.
 def specializeCommands(
                 commands,
@@ -344,7 +346,7 @@ def specializeCommands(
     return commands
 
 
-# Copied from fonttools.cffLib.specializer: will merge this back once 
+# Copied from fonttools.cffLib.specializer: will merge this back once
 # everything is working.
 def commandsToProgram(commands, max_stack, var_model=None):
     """Takes a commands list as returned by programToCommands() and converts
@@ -397,17 +399,20 @@ def commandsToProgram(commands, max_stack, var_model=None):
 class CFF2CharStringMergePen(T2CharStringPen):
     """Pen to merge Type 2 CharStrings.
     """
-    def __init__(self, default_commands, num_masters, master_idx, roundTolerance=0.5):
+    def __init__(self, default_commands,
+                 num_masters, master_idx, roundTolerance=0.5):
         super(
             CFF2CharStringMergePen,
-            self).__init__(width=None, glyphSet=None, CFF2=True, roundTolerance=roundTolerance)
+            self).__init__(width=None,
+                           glyphSet=None, CFF2=True,
+                           roundTolerance=roundTolerance)
         self.pt_index = 0
         self._commands = default_commands
         self.m_index = master_idx
         self.num_masters = num_masters
         self.prev_move_idx = 0
         self.roundTolerance = roundTolerance
-        
+
     def _round(self, number):
         tolerance = self.roundTolerance
         if tolerance == 0:
@@ -421,7 +426,7 @@ class CFF2CharStringMergePen(T2CharStringPen):
         else:
             # else return the value un-rounded
             return number
-        
+
     def _p(self, pt):
         """ Unlike T2CharstringPen, this class stores absolute values.
         This is to allow the logic in check_and_fix_clospath() to work,
@@ -435,14 +440,14 @@ class CFF2CharStringMergePen(T2CharStringPen):
         # Convert line coords to curve coords.
         dx = self._round((cur_coords[0] - prev_coords[0])/3.0)
         dy = self._round((cur_coords[1] - prev_coords[1])/3.0)
-        new_coords = [  prev_coords[0] + dx,
-                    prev_coords[1] + dy,
-                    prev_coords[0] + 2*dx,
-                    prev_coords[1] + 2*dy
-                 ] + cur_coords
+        new_coords = [prev_coords[0] + dx,
+                      prev_coords[1] + dy,
+                      prev_coords[0] + 2*dx,
+                      prev_coords[1] + 2*dy
+                      ] + cur_coords
         return new_coords
 
-    def make_flat_curve_coords(self, coords, is_default):
+    def make_curve_coords(self, coords, is_default):
         # Convert line coords to curve coords.
         prev_cmd = self._commands[self.pt_index-1]
         if is_default:
@@ -462,11 +467,11 @@ class CFF2CharStringMergePen(T2CharStringPen):
     def check_and_fix_flat_curve(self, cmd, point_type, pt_coords):
         if (point_type == 'rlineto') and (cmd[0] == 'rrcurveto'):
             is_default = False
-            pt_coords = self.make_flat_curve_coords(pt_coords, is_default)
+            pt_coords = self.make_curve_coords(pt_coords, is_default)
             success = True
         elif (point_type == 'rrcurveto') and (cmd[0] == 'rlineto'):
             is_default = True
-            expanded_coords = self.make_flat_curve_coords(cmd[1], is_default)
+            expanded_coords = self.make_curve_coords(cmd[1], is_default)
             cmd[1] = expanded_coords
             cmd[0] = point_type
             success = True
@@ -484,18 +489,18 @@ class CFF2CharStringMergePen(T2CharStringPen):
         2) the previous op for this master does not close the path
         3) in the other master the current op is not a moveto
         4) the current op in the otehr master closes the current path
-        
+
         If the default font is missing the closing lineto, insert it,
         then proceed with merging the current op and pt_coords.
-        
+
         If the current region is missing the closing lineto
         and therefore the current op is a moveto,
         then add closing coordinates to self._commands,
         and increment self.pt_index.
-        
+
         Note that if this may insert a point in the default font list,
         so after using it, 'cmd' needs to be reset.
-        
+
         return True if we can fix this issue.
         """
         if point_type == 'rmoveto':
@@ -518,7 +523,7 @@ class CFF2CharStringMergePen(T2CharStringPen):
             # so that the current region op will get merged
             # with the next default font moveto.
             if cmd[0] == 'rrcurveto':
-                new_coords = self.make_flat_curve_coords(prev_moveto_coords, False)
+                new_coords = self.make_curve_coords(prev_moveto_coords, False)
             cmd[1].append(new_coords)
             self.pt_index += 1
             return True
@@ -529,32 +534,32 @@ class CFF2CharStringMergePen(T2CharStringPen):
             prv_coords = self._commands[self.pt_index-1][1][0]
             if prev_moveto_coords == prv_coords[-2:]:
                 return False
-            
+
             # The current op must close the path for this region font.
             prev_moveto_coords2 = self._commands[self.prev_move_idx][1][-1]
             if prev_moveto_coords2 != pt_coords[-2:]:
                 return False
-                
+
             # Insert the close path segment in the default font.
             # We omit the last coords from the previous moveto
             # is it will be supplied by the current region point.
             # after this function returns.
             new_cmd = [point_type, None]
-            prev_move_coords =  self._commands[self.prev_move_idx][1][:-1]
+            prev_move_coords = self._commands[self.prev_move_idx][1][:-1]
             # Note that we omit the last region's coord from prev_move_coords,
-            # as that is from the current region, and we will add the 
+            # as that is from the current region, and we will add the
             # current pts' coords from the current region in its place.
             if point_type == 'rlineto':
                 new_cmd[1] = prev_move_coords
             else:
                 # We omit the last set of coords from the
-                # previous moveto, as it will be supplied by the coords 
+                # previous moveto, as it will be supplied by the coords
                 # for the current region pt.
-                new_cmd[1] = self.make_flat_curve_coords(prev_move_coords, True)
+                new_cmd[1] = self.make_curve_coords(prev_move_coords, True)
             self._commands.insert(self.pt_index, new_cmd)
             return True
         return False
-        
+
     def add_point(self, point_type, pt_coords):
         if self.m_index == 0:
             self._commands.append([point_type, [pt_coords]])
@@ -589,8 +594,8 @@ class CFF2CharStringMergePen(T2CharStringPen):
         self.add_point('rmoveto', pt_coords)
         # I set prev_move_idx here because add_point()
         # can change self.pt_index.
-        self.prev_move_idx = self.pt_index -1
-        
+        self.prev_move_idx = self.pt_index - 1
+
     def _lineTo(self, pt):
         pt_coords = self._p(pt)
         self.add_point('rlineto', pt_coords)
@@ -640,8 +645,8 @@ class CFF2CharStringMergePen(T2CharStringPen):
             rel_coords = []
             for coord in coords:
                 prev_coord = x0 if is_x else y0
-                rel_coord = [pt[0] - pt[1] for pt in  zip(coord, prev_coord)]
-                
+                rel_coord = [pt[0] - pt[1] for pt in zip(coord, prev_coord)]
+
                 if max(rel_coord) == min(rel_coord):
                     rel_coord = rel_coord[0]
                 rel_coords.append(rel_coord)

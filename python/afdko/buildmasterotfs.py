@@ -215,10 +215,10 @@ def main(args=None):
             ufoName, otfName, mkot_options)
         log = runShellCmd(cmd)
         if (
-				("FATAL" in log) or
-				("Failed to build" in log) or
-				("Built" not in str(log))
-			):
+            ("FATAL" in log) or
+            ("Failed to build" in log) or
+            ("Built" not in str(log))
+           ):
             print("Error building OTF font for", master_path)
             print('Error log: """', log, '"""')
             print("makeotf cmd was '%s' in %s." % (cmd, masterDir))

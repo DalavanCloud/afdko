@@ -1,6 +1,7 @@
 # Copyright (c) 2009 Type Supply LLC
 
 from __future__ import print_function, division, absolute_import
+from fontTools.misc.fixedTools import otRound
 from fontTools.misc.psCharStrings import CFF2Subr
 from fontTools.pens.t2CharStringPen import T2CharStringPen
 from fontTools.cffLib.specializer import (
@@ -22,6 +23,8 @@ index {m_index} differs from the default font point type '{default_type}'""".for
         super(MergeTypeError, self).__init__(self.error_msg)
 
 
+# Copied from fonttools.cffLib.specializer: will merge this back once 
+# everything is working.
 def specializeCommands(
                 commands,
                 ignoreErrors=False,
@@ -341,6 +344,8 @@ def specializeCommands(
     return commands
 
 
+# Copied from fonttools.cffLib.specializer: will merge this back once 
+# everything is working.
 def commandsToProgram(commands, max_stack, var_model=None):
     """Takes a commands list as returned by programToCommands() and converts
     it back to a T2CharString program list."""
@@ -392,15 +397,30 @@ def commandsToProgram(commands, max_stack, var_model=None):
 class CFF2CharStringMergePen(T2CharStringPen):
     """Pen to merge Type 2 CharStrings.
     """
-    def __init__(self, default_commands, num_masters, master_idx):
+    def __init__(self, default_commands, num_masters, master_idx, roundTolerance=0.5):
         super(
             CFF2CharStringMergePen,
-            self).__init__(width=None, glyphSet=None, CFF2=True)
+            self).__init__(width=None, glyphSet=None, CFF2=True, roundTolerance=roundTolerance)
         self.pt_index = 0
         self._commands = default_commands
         self.m_index = master_idx
         self.num_masters = num_masters
         self.prev_move_idx = 0
+        self.roundTolerance = roundTolerance
+        
+    def _round(self, number):
+        tolerance = self.roundTolerance
+        if tolerance == 0:
+            return number  # no-op
+        rounded = otRound(number)
+        # return rounded integer if the tolerance >= 0.5, or if the absolute
+        # difference between the original float and the rounded integer is
+        # within the tolerance
+        if tolerance >= .5 or abs(rounded - number) <= tolerance:
+            return rounded
+        else:
+            # else return the value un-rounded
+            return number
         
     def _p(self, pt):
         """ Unlike T2CharstringPen, this class stores absolute values.
@@ -411,21 +431,42 @@ class CFF2CharStringMergePen(T2CharStringPen):
         self._p0 = pt
         return list(self._p0)
 
-    def make_flat_curve(self, coords):
-        # coords id for a lineto that needs to be a flat curve.
-        # Convert to curve coords  by pre-pending [0,0], and appending [0,0]
-        if isinstance(coords[0], list):
-            new_coords = [ [0, 0] + pt_coord + [0, 0] for pt_coord in coords]
+    def make_flat_curve(self, prev_coords, cur_coords):
+        # Convert line coords to curve coords.
+        dx = self._round((cur_coords[0] - prev_coords[0])/3.0)
+        dy = self._round((cur_coords[1] - prev_coords[1])/3.0)
+        new_coords = [  prev_coords[0] + dx,
+                    prev_coords[1] + dy,
+                    prev_coords[0] + 2*dx,
+                    prev_coords[1] + 2*dy
+                 ] + cur_coords
+        return new_coords
+
+    def make_flat_curve_coords(self, coords, is_default):
+        # Convert line coords to curve coords.
+        prev_cmd = self._commands[self.pt_index-1]
+        if is_default:
+            new_coords = []
+            for i, cur_coords in enumerate(coords):
+                prev_coords = prev_cmd[1][i]
+                master_coords = self.make_flat_curve(
+                                            prev_coords[:2], cur_coords
+                                            )
+                new_coords.append(master_coords)
         else:
-            new_coords = [0, 0] + coords + [0, 0]
+            cur_coords = coords
+            prev_coords = prev_cmd[1][-1]
+            new_coords = self.make_flat_curve(prev_coords[:2], cur_coords)
         return new_coords
 
     def check_and_fix_flat_curve(self, cmd, point_type, pt_coords):
         if (point_type == 'rlineto') and (cmd[0] == 'rrcurveto'):
-            pt_coords = self.make_flat_curve(pt_coords)
+            is_default = False
+            pt_coords = self.make_flat_curve_coords(pt_coords, is_default)
             success = True
         elif (point_type == 'rrcurveto') and (cmd[0] == 'rlineto'):
-            expanded_coords = self.make_flat_curve(cmd[1])
+            is_default = True
+            expanded_coords = self.make_flat_curve_coords(cmd[1], is_default)
             cmd[1] = expanded_coords
             cmd[0] = point_type
             success = True
@@ -477,7 +518,7 @@ class CFF2CharStringMergePen(T2CharStringPen):
             # so that the current region op will get merged
             # with the next default font moveto.
             if cmd[0] == 'rrcurveto':
-                new_coords = self.make_flat_curve(prev_moveto_coords)
+                new_coords = self.make_flat_curve_coords(prev_moveto_coords, False)
             cmd[1].append(new_coords)
             self.pt_index += 1
             return True
@@ -500,16 +541,16 @@ class CFF2CharStringMergePen(T2CharStringPen):
             # after this function returns.
             new_cmd = [point_type, None]
             prev_move_coords =  self._commands[self.prev_move_idx][1][:-1]
+            # Note that we omit the last region's coord from prev_move_coords,
+            # as that is from the current region, and we will add the 
+            # current pts' coords from the current region in its place.
             if point_type == 'rlineto':
                 new_cmd[1] = prev_move_coords
             else:
-                new_cmd[1] = coord_list = []
                 # We omit the last set of coords from the
-                # previous moveto, as it will be supplied by the'coords 
+                # previous moveto, as it will be supplied by the coords 
                 # for the current region pt.
-                for coords in prev_move_coords:
-                    new_coords = self.make_flat_curve(coords)
-                    coord_list.append(new_coords)
+                new_cmd[1] = self.make_flat_curve_coords(prev_move_coords, True)
             self._commands.insert(self.pt_index, new_cmd)
             return True
         return False
@@ -522,7 +563,7 @@ class CFF2CharStringMergePen(T2CharStringPen):
             if cmd[0] != point_type:
                 # Fix some issues that show up in some
                 # CFF workflows, even when fonts are
-                # toplogically merge compatible.
+                # topologically merge compatible.
                 success, pt_coords = self.check_and_fix_flat_curve(
                             cmd, point_type, pt_coords)
                 if not success:
@@ -587,7 +628,7 @@ class CFF2CharStringMergePen(T2CharStringPen):
             # arg[i] is the set of arguments for this operator from master i.
             args = cmd[1]
             m_args = zip(*args)
-            # m_args[n] is now all num_master args for the ith argument
+            # m_args[n] is now all num_master args for the i'th argument
             # for this operation.
             cmd[1] = m_args
 
@@ -600,6 +641,7 @@ class CFF2CharStringMergePen(T2CharStringPen):
             for coord in coords:
                 prev_coord = x0 if is_x else y0
                 rel_coord = [pt[0] - pt[1] for pt in  zip(coord, prev_coord)]
+                
                 if max(rel_coord) == min(rel_coord):
                     rel_coord = rel_coord[0]
                 rel_coords.append(rel_coord)

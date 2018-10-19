@@ -2,7 +2,7 @@ import os
 import fontTools
 from fontTools.ttLib.ttFont import TTFont
 from fontTools.varLib import (load_designspace, log)
-from cff2_specializer import (addCFFVarStore,
+from afdko.cff2_specializer import (addCFFVarStore,
                               addNamesToPost,
                               merge_PrivateDicts,
                               merge_charstrings,

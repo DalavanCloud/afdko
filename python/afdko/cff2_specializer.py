@@ -11,7 +11,7 @@ from fontTools.cffLib import (TopDictIndex,
                               VarStoreData,)
 from fontTools.ttLib import newTable
 from fontTools import varLib
-from cff2mergePen import CFF2CharStringMergePen, MergeTypeError
+from afdko.cff2mergePen import CFF2CharStringMergePen, MergeTypeError
 
 
 def addCFFVarStore(varFont, varModel):
@@ -161,7 +161,7 @@ def merge_PrivateDicts(topDict, region_top_dicts, num_masters, var_model):
                 except KeyError:
                     del private_dict.rawDict[key]
                     print(
-                        "Warning: {key} in default font Private dict is "
+                        b"Warning: {key} in default font Private dict is "
                         b"missing from another font, and was "
                         b"discarded.".format(key=key))
                     continue

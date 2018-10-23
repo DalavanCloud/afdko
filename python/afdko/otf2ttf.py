@@ -1,12 +1,19 @@
 #!/usr/bin/env python
 from __future__ import print_function, division, absolute_import
-import sys
-from fontTools.ttLib import TTFont, newTable
-from cu2qu.pens import Cu2QuPen
-from fontTools.pens.ttGlyphPen import TTGlyphPen
-from fontTools.ttx import makeOutputFileName
-import argparse
 
+import argparse
+import logging
+import os
+import sys
+
+from cu2qu.pens import Cu2QuPen
+from fontTools import configLogger
+from fontTools.misc.cliTools import makeOutputFileName
+from fontTools.pens.ttGlyphPen import TTGlyphPen
+from fontTools.ttLib import TTFont, newTable
+
+
+log = logging.getLogger()
 
 # default approximation error, measured in UPEM
 MAX_ERR = 1.0
@@ -43,6 +50,7 @@ def otf_to_ttf(ttFont, post_format=POST_FORMAT, **kwargs):
     glyf.glyphOrder = glyphOrder
     glyf.glyphs = glyphs_to_quadratic(ttFont.getGlyphSet(), **kwargs)
     del ttFont["CFF "]
+    glyf.compile(ttFont)
 
     ttFont["maxp"] = maxp = newTable("maxp")
     maxp.tableVersion = 0x00010000
@@ -56,17 +64,25 @@ def otf_to_ttf(ttFont, post_format=POST_FORMAT, **kwargs):
     maxp.maxComponentElements = max(
         len(g.components if hasattr(g, 'components') else [])
         for g in glyf.glyphs.values())
+    maxp.compile(ttFont)
 
     post = ttFont["post"]
     post.formatType = post_format
     post.extraNames = []
     post.mapping = {}
     post.glyphOrder = glyphOrder
+    try:
+        post.compile(ttFont)
+    except OverflowError:
+        post.formatType = 3
+        log.warning("Dropping glyph names, they do not fit in 'post' table.")
 
     ttFont.sfntVersion = "\000\001\000\000"
 
 
 def main(args=None):
+    configLogger(logger=log)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("input", nargs='+', metavar="INPUT")
     parser.add_argument("-o", "--output")
@@ -74,13 +90,24 @@ def main(args=None):
     parser.add_argument("--post-format", type=float, default=POST_FORMAT)
     parser.add_argument(
         "--keep-direction", dest='reverse_direction', action='store_false')
+    parser.add_argument("--face-index", type=int, default=0)
+    parser.add_argument("--overwrite", action='store_true')
     options = parser.parse_args(args)
 
+    if options.output and len(options.input) > 1:
+        if not os.path.isdir(options.output):
+            parser.error("-o/--output option must be a directory when "
+                         "processing multiple fonts")
+
     for path in options.input:
-        output = options.output or makeOutputFileName(path,
-                                                      outputDir=None,
-                                                      extension='.ttf')
-        font = TTFont(path)
+        if options.output and not os.path.isdir(options.output):
+            output = options.output
+        else:
+            output = makeOutputFileName(path, outputDir=options.output,
+                                        extension='.ttf',
+                                        overWrite=options.overwrite)
+
+        font = TTFont(path, fontNumber=options.face_index)
         otf_to_ttf(font,
                    post_format=options.post_format,
                    max_err=options.max_error,

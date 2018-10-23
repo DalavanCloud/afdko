@@ -47,8 +47,8 @@ import os
 import sys
 
 from fontTools import version as fontToolsVersion
+from fontTools.varLib import build as varlib_build
 from pkg_resources import parse_version
-from afdko.cff2_varlib import build as varlib_build
 
 
 def otfFinder(s):

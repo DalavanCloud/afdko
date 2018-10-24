@@ -1,0 +1,14 @@
+#--------------------------------------
+languagesystem DFLT dflt; # Default
+
+#-------------------------------------------
+feature test {
+	sub dollar by dollar.a;
+} test;
+
+
+#-------------------------------------------
+feature size {
+	parameters 10.0 0; # design size, subfamily
+} size;
+
